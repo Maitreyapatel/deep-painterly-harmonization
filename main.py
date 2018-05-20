@@ -1,6 +1,8 @@
 from PIL import Image
 import matplotlib.pyplot as plt
 import argparse
+import numpy as np
+import cv2
 
 import torch
 from torch.autograd import Variable
@@ -13,12 +15,13 @@ from torchvision import transforms
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--style", help="style image path",
-                    type=str, required=True)
+                    type=str, required=False, default="images/16_target.jpg")
 parser.add_argument("--input", help="input image path",
-                    type=str, required=True)
-parser.add_argument("--mask", help="tight mask path", type=str, required=True)
+                    type=str, required=False, default="images/16_naive.jpg")
+parser.add_argument("--mask", help="tight mask path",
+                    type=str, required=False, default="images/16_c_mask.jpg")
 parser.add_argument("--loose_mask", help="loose mask path",
-                    type=str, required=True)
+                    type=str, required=False, default="images/16_c_mask_dilated.jpg")
 args = parser.parse_args()
 
 
@@ -27,11 +30,13 @@ input_img = Image.open(args.input)
 mask_img = Image.open(args.mask)
 l_mask_image = Image.open(args.loose_mask)
 
-#Define vgg model
+# Define vgg model
+
+
 class VGG(nn.Module):
     def __init__(self, pool='max'):
         super(VGG, self).__init__()
-        #vgg modules
+        # vgg modules
         self.conv1_1 = nn.Conv2d(3, 64, kernel_size=3, padding=1)
         self.conv1_2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
         self.conv2_1 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
@@ -86,15 +91,91 @@ class VGG(nn.Module):
         out['p5'] = self.pool5(out['r54'])
         return [out[key] for key in out_keys]
 
-style_layers = ['r11','r21','r31','r41', 'r51']
-vgg = VGG()
-vgg.load_state_dict(torch.load(model_dir + 'vgg_conv.pth'))
 
-#Define ImageNet Normalization
-prep = transforms.Compose([transforms.Scale((img_size,img_size)),
-                           transforms.ToTensor(),
-                           transforms.Lambda(lambda x: x[torch.LongTensor([2,1,0])]),
+style_layers = ['r11', 'r21', 'r31', 'r41', 'r51']
+vgg = VGG().cuda()
+vgg.load_state_dict(torch.load("model_dir/" + 'vgg_conv.pth'))
+
+# Define ImageNet Normalization
+img_size = 256
+prep = transforms.Compose([transforms.ToTensor(),
+                           transforms.Lambda(
+                               lambda x: x[torch.LongTensor([2, 1, 0])]),
                            transforms.Normalize(mean=[0.40760392, 0.45795686, 0.48501961],
-                                                std=[1,1,1]),
+                                                std=[1, 1, 1]),
                            transforms.Lambda(lambda x: x.mul_(255)),
-                          ])
+                           ])
+
+# normalize input and style image
+input_norm = prep(input_img)
+style_norm = prep(style_img)
+
+# Now start the main algorithm
+
+# First-Pass Algorithms(2,3)
+
+# Take out conv layer features for both input and style image
+output_input = vgg(Variable(input_norm.unsqueeze(0).cuda()),
+                   out_keys=style_layers)
+style_input = vgg(Variable(style_norm.unsqueeze(0).cuda()),
+                  out_keys=style_layers)
+
+
+#Another model for converting mask image input to the same size like output of conv3_1, conv4_1, conv5_1
+class Convert(nn.Module):
+    def __init__(self):
+        super(Convert, self).__init__()
+        pool = nn.AvgPool2d(3, 1, 1)
+
+    def forward(self, x, out_keys):
+        out = {}
+
+        m = pool(Variable(x[None][None]))
+        m = pool(m)
+        m = m.data.squeeze().numpy()
+
+        h,w = m.shape
+        m = cv2.resize(m, (w//2,h//2))
+
+        m = pool(Variable(m[None][None]))
+        m = pool(m)
+        m = m.data.squeeze().numpy()
+
+        h,w = m.shape
+        m = cv2.resize(m, (w//2,h//2))
+
+        m = pool(Variable(m[None][None]))
+        t1 = m.data.squeeze().numpy()
+
+        out.append(t1)
+
+        m = pool(Variable(t1[None][None]))
+        m = pool(m)
+        m = m.data.squeeze().numpy()
+
+        h,w = m.shape
+        m = cv2.resize(m, (w//2,h//2))
+
+        m = pool(Variable(m[None][None]))
+        t2 = m.data.squeeze().numpy()
+
+        out.append(t2)
+
+        m = pool(Variable(t2[None][None]))
+        m = pool(m)
+        m = m.data.squeeze().numpy()
+
+        h,w = m.shape
+        m = cv2.resize(m, (w//2,h//2))
+
+        m = pool(Variable(m[None][None]))
+        t3 = m.data.squeeze().numpy()
+
+        out.append(t3)
+
+        return out
+
+# 1)Mapping
+
+
+# 2)Reconstruction
