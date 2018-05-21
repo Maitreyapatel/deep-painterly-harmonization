@@ -121,59 +121,68 @@ style_input = vgg(Variable(style_norm.unsqueeze(0).cuda()),
                   out_keys=style_layers)
 
 
-#Another model for converting mask image input to the same size like output of conv3_1, conv4_1, conv5_1
+# Another model for converting mask image input to the same size like output of conv3_1, conv4_1, conv5_1
 class Convert(nn.Module):
     def __init__(self):
         super(Convert, self).__init__()
-        pool = nn.AvgPool2d(3, 1, 1)
+        self.pool = nn.AvgPool2d(3, 1, 1)
 
-    def forward(self, x, out_keys):
-        out = {}
+    def forward(self, x):
+        out = []
 
-        m = pool(Variable(x[None][None]))
-        m = pool(m)
+        m = self.pool(Variable(torch.from_numpy(x[None][None]).type(torch.DoubleTensor)))
+        m = self.pool(m)
+
+        m = m.data.squeeze().numpy()
+
+        h, w = m.shape
+        m = cv2.resize(m, (w // 2, h // 2))
+
+        m = self.pool(Variable(torch.from_numpy(m[None][None]).type(torch.DoubleTensor)))
+        m = self.pool(m)
         m = m.data.squeeze().numpy()
 
         h,w = m.shape
         m = cv2.resize(m, (w//2,h//2))
 
-        m = pool(Variable(m[None][None]))
-        m = pool(m)
-        m = m.data.squeeze().numpy()
-
-        h,w = m.shape
-        m = cv2.resize(m, (w//2,h//2))
-
-        m = pool(Variable(m[None][None]))
+        m = self.pool(Variable(torch.from_numpy(m[None][None]).type(torch.DoubleTensor)))
         t1 = m.data.squeeze().numpy()
 
         out.append(t1)
 
-        m = pool(Variable(t1[None][None]))
-        m = pool(m)
+        m = self.pool(Variable(torch.from_numpy(t1[None][None]).type(torch.DoubleTensor)))
+        m = self.pool(m)
         m = m.data.squeeze().numpy()
 
-        h,w = m.shape
-        m = cv2.resize(m, (w//2,h//2))
+        h, w = m.shape
+        m = cv2.resize(m, (w // 2, h // 2))
 
-        m = pool(Variable(m[None][None]))
+        m = self.pool(Variable(torch.from_numpy(m[None][None]).type(torch.DoubleTensor)))
         t2 = m.data.squeeze().numpy()
 
         out.append(t2)
 
-        m = pool(Variable(t2[None][None]))
-        m = pool(m)
+        m = self.pool(Variable(torch.from_numpy(t2[None][None]).type(torch.DoubleTensor)))
+        m = self.pool(m)
         m = m.data.squeeze().numpy()
 
-        h,w = m.shape
-        m = cv2.resize(m, (w//2,h//2))
+        h, w = m.shape
+        m = cv2.resize(m, (w // 2, h // 2))
 
-        m = pool(Variable(m[None][None]))
+        m = self.pool(Variable(torch.from_numpy(m[None][None]).type(torch.DoubleTensor)))
         t3 = m.data.squeeze().numpy()
 
         out.append(t3)
 
         return out
+
+
+cot = Convert()
+
+
+temp = np.array(l_mask_image)[:,:,0]
+l_mask_out = cot(temp)
+
 
 # 1)Mapping
 
