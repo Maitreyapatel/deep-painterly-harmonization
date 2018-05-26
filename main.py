@@ -33,8 +33,6 @@ mask_img = Image.open(args.mask)
 l_mask_image = Image.open(args.loose_mask)
 
 # Define vgg model
-
-
 class VGG(nn.Module):
     def __init__(self, pool='max'):
         super(VGG, self).__init__()
@@ -102,6 +100,8 @@ for param in vgg.parameters():
 
 vgg.load_state_dict(torch.load("model_dir/" + 'vgg_conv.pth'))
 print("Pretrained model loaded...!!")
+
+
 # Define ImageNet Normalization
 img_size = 256
 prep = transforms.Compose([transforms.ToTensor(),
@@ -122,7 +122,6 @@ input_img = Image.fromarray(halve_size(input_img))
 style_img = Image.fromarray(halve_size(style_img))
 mask_img = Image.fromarray(halve_size(mask_img))
 l_mask_image = Image.fromarray(halve_size(l_mask_image))
-#mask_smth = halve_size(mask_smth)
 
 
 # normalize input and style image
@@ -207,62 +206,11 @@ class Convert(nn.Module):
 cot = Convert()
 
 
-#temp = np.array(l_mask_image)[:,:,0]
-#l_mask_out = cot(temp)
-
-def halve_size(mask):
-    h, w = mask.shape
-    return cv2.resize(mask, (w // 2, h // 2))
+temp = np.array(l_mask_image)[:,:,0]
+mask_ftrs = cot(temp)
 
 
-ConvolMask = nn.AvgPool2d(3, 1, 1)
-
-
-def convol(mask, nb):
-    x = Variable(torch.from_numpy(mask[None][None]).type(torch.DoubleTensor))
-    for i in range(nb):
-        x = ConvolMask(x)
-    return x.data.squeeze().numpy()
-
-
-def get_mask_ftrs(mask):
-    ftrs = []
-    mask = halve_size(convol(mask, 2))
-    mask = halve_size(convol(mask, 2))
-    mask = convol(mask, 1)
-    ftrs.append(mask)
-    mask = halve_size(convol(mask, 2))  # 3 for VGG19
-    mask = convol(mask, 1)
-    ftrs.append(mask)
-    mask = halve_size(convol(mask, 2))  # 3 for VGG19
-    mask = convol(mask, 1)
-    ftrs.append(mask)
-    return ftrs
-
-
-mask_ftrs = get_mask_ftrs(np.array(l_mask_image)[:, :, 0])
-
-'''
-##Trials
-def gram(input):
-    b,c,h,w = input.size()
-    F = input.view(b, c, h*w)
-    G = torch.bmm(F, F.transpose(1,2))
-    G.div_(h*w)
-    #print(G)
-    return G
-
-print(style_ftr[2].shape)
-print(Variable(torch.from_numpy(mask_ftrs[0]).type(torch.FloatTensor), requires_grad=False).shape)
-sf = style_ftr[2].cuda() * Variable(torch.from_numpy(mask_ftrs[0]).type(torch.FloatTensor), requires_grad=False).cuda()
-print(sf.shape)
-t=gram(sf)
-print("t",t.squeeze().shape)
-k=input("DOne")
-
-'''
 # 1)Mapping
-
 
 def patches(x, ks=3, stride=1, padding=1):     # Time complexity is too much must be removed
     main = []
@@ -279,30 +227,12 @@ def patches(x, ks=3, stride=1, padding=1):     # Time complexity is too much mus
             main.append(temp)
     return torch.from_numpy(np.array(main))
 
-
-def get_patches(x, ks=3, stride=1, padding=1):
-    ch, n1, n2 = x.shape
-    y = np.zeros((ch, n1 + 2 * padding, n2 + 2 * padding))
-    y[:, padding:n1 + padding, padding:n2 + padding] = x
-    start_idx = np.array([j + (n2 + 2 * padding) * i for i in range(0, n1 - ks +
-                                                                    1 + 2 * padding, stride) for j in range(0, n2 - ks + 1 + 2 * padding, stride)])
-    grid = np.array([j + (n2 + 2 * padding) * i + (n1 + 2 * padding) * (n2 + 2 * padding)
-                     * k for k in range(0, ch) for i in range(ks) for j in range(ks)])
-    to_take = start_idx[:, None] + grid[None, :]
-    return torch.from_numpy(y.take(to_take))
-
-# print(style_input[2].cpu().data.numpy()[0].shape)
-# l_inp = get_patches((style_input[2].cpu().data.numpy()[0]))
-# print(l_inp.shape)
-# x = style_input[2].cpu().data.numpy()[0]
-
-
 def match_ftrs():
     res = []
     for i in range(3):
-        l_inp = Variable(get_patches(
+        l_inp = Variable(patches(
             input_ftr[2 + i].cpu().data.numpy()[0])).cuda()
-        s_inp = Variable(get_patches(
+        s_inp = Variable(patches(
             style_ftr[2 + i].cpu().data.numpy()[0])).cuda()
         scals = torch.mm(l_inp, s_inp.t())
         norms_in = torch.sqrt((l_inp ** 2).sum(1))
@@ -333,6 +263,7 @@ def map_style():
 sty_ftrs = map_style()
 
 
+
 # 2)Reconstruction
 postpa = transforms.Compose([transforms.Lambda(lambda x: x.mul_(1. / 255)),
                              transforms.Normalize(mean=[-0.40760392, -0.45795686, -0.48501961],
@@ -352,39 +283,14 @@ def postp(tensor):
     return img
 
 
-# fig, ax = plt.subplots(1,1, figsize=(10,10))
 opt_img = input_norm.clone().cuda()
-# out_img = np.array(postp(opt_img.cpu().squeeze()))
-# ax.imshow(out_img)
-# ax.axis('off')
-# plt.show()
-print("Cloned")
 
 opt_img_v = Variable(opt_img[None], requires_grad=True)
 print(opt_img_v.shape)
 
-max_iter = 1000
-show_iter = 100
+max_iter = 150
+show_iter = 50
 optimizer = optim.LBFGS([opt_img_v], lr=1)
-
-
-def step(loss_fn):
-    global n_iter
-    optimizer.zero_grad()
-    loss = loss_fn(opt_img_v)
-    loss.backward()
-    n_iter += 1
-    if n_iter % show_iter == 0:
-        print('Iteration: {}, loss: {}'.format(n_iter, loss.data[0]))
-    return loss
-
-
-def content_loss(out_ftrs):
-    msk_of = out_ftrs.cuda() * Variable(torch.from_numpy(
-        mask_ftrs[1][None, None]).type(torch.FloatTensor), requires_grad=False).cuda()
-    msk_if = input_ftr[3].cuda() * Variable(torch.from_numpy(mask_ftrs[1]
-                                                             [None, None]).type(torch.FloatTensor), requires_grad=False).cuda()
-    return F.mse_loss(msk_of, msk_if, size_average=False) / float(out_ftrs.size(1) * torch.from_numpy(mask_ftrs[1]).sum())
 
 
 def gram(input):
@@ -403,51 +309,55 @@ def gram_org(input):
 def gram_mse_loss(input, target): return F.mse_loss(
     gram_org(input), gram_org(target))
 
-
-def style_loss(out_ftrs):
-    loss = 0
-    i = 0
-    for of, sf, mf in zip(out_ftrs, sty_ftrs, mask_ftrs):
-        to_pass = of.cuda() * Variable(torch.from_numpy(mf[None, None]).type(
-            torch.FloatTensor), requires_grad=False).cuda()
-        to_pass = to_pass.view(to_pass.size(1), -1)
-        # print("passss ",to_pass.view(to_pass.size(1),-1).shape)
-        #to_pass = to_pass.view(to_pass.size(1),-1)
-        # print(sf.shape)
-        # print(Variable(torch.from_numpy(mf).type(torch.FloatTensor), requires_grad=False).view(1,-1).shape)
-        sf = sf.cuda() * Variable(torch.from_numpy(mf).type(torch.FloatTensor),
-                                  requires_grad=False).view(1, -1).cuda()
-        # sf = style_ftr[2+i].cuda() * Variable(torch.from_numpy(mask_ftrs[i]).type(torch.FloatTensor), requires_grad=False).cuda()
-        i += 1
-        loss += gram_mse_loss(to_pass, sf)
-    return loss / 3
-
-
-w_c, w_s = 1, 10
-
-
-def stage1_loss(opt_img_v):
-    out = vgg(opt_img_v, style_layers)
-    out_ftrs = out[2:]
-    c_loss = content_loss(out_ftrs[1])
-    s_loss = style_loss(out_ftrs)
-    print("c_loss:", c_loss)
-    print("s_loss:", s_loss)
-    return w_c * c_loss + w_s * s_loss
-
-
 n_iter = 0
 while n_iter < max_iter:
-    optimizer.step(partial(step, stage1_loss))
 
-mask_smth = cv2.GaussianBlur(np.array(mask_img), (3, 3), 1)
+
+    def closure():
+        optimizer.zero_grad()
+        out = vgg(opt_img_v, style_layers)
+        out_ftrs = out[2:]
+
+        msk_of = out_ftrs[1].cuda() * Variable(torch.from_numpy(
+            mask_ftrs[1][None, None]).type(torch.FloatTensor), requires_grad=False).cuda()
+        msk_if = input_ftr[3].cuda() * Variable(torch.from_numpy(mask_ftrs[1]
+                                                                 [None, None]).type(torch.FloatTensor), requires_grad=False).cuda()
+        c_loss = F.mse_loss(msk_of, msk_if, size_average=False) / float(out_ftrs[1].size(1) * torch.from_numpy(mask_ftrs[1]).sum())
+
+
+        loss = 0
+        i = 0
+        for of, sf, mf in zip(out_ftrs, sty_ftrs, mask_ftrs):
+            to_pass = of.cuda() * Variable(torch.from_numpy(mf[None, None]).type(
+                torch.FloatTensor), requires_grad=False).cuda()
+            to_pass = to_pass.view(to_pass.size(1), -1)
+            sf = sf.cuda() * Variable(torch.from_numpy(mf).type(torch.FloatTensor),
+                                      requires_grad=False).view(1, -1).cuda()
+            i += 1
+            loss += gram_mse_loss(to_pass, sf)
+
+        s_loss = loss / 3
+
+        t_loss = 1 * c_loss + 10 * s_loss
+        t_loss.backward()
+
+        global n_iter
+        n_iter += 1
+        if n_iter % show_iter == 0:
+            print('Iteration: {}, loss: {}'.format(n_iter, loss.data[0]))
+
+        return t_loss
+
+
+    optimizer.step(closure)
 
 
 fig, ax = plt.subplots(1, 1, figsize=(10, 10))
-out_img = np.array(postp(opt_img_v.cpu().data.squeeze()))
-out_img = out_img * np.array(mask_smth) + \
-    np.array(style_img) * (1 - np.array(mask_smth))
-# out_img = out_img.clip(0, 1) #Pixel values shouldn't get below 0 or be greater than 1.
+out_img = np.array(postp(opt_img_v.cpu().data.squeeze()))/255
+print("asj:",out_img.shape)
+
+
+out_img = out_img * (np.array(mask_img)/255) + (np.array(style_img)/255) * (1 - (np.array(mask_img))/255)
 ax.imshow(out_img)
 ax.axis('off')
 plt.show()
