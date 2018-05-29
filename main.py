@@ -17,20 +17,20 @@ from torchvision import transforms
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--style", help="style image path",
-                    type=str, required=False, default="images/16_target.jpg")
+                    type=str, required=False, default="images/6_target.jpg")
 parser.add_argument("--input", help="input image path",
-                    type=str, required=False, default="images/16_naive.jpg")
+                    type=str, required=False, default="images/6_naive.jpg")
 parser.add_argument("--mask", help="tight mask path",
-                    type=str, required=False, default="images/16_c_mask.jpg")
+                    type=str, required=False, default="images/6_c_mask.jpg")
 parser.add_argument("--loose_mask", help="loose mask path",
-                    type=str, required=False, default="images/16_c_mask_dilated.jpg")
+                    type=str, required=False, default="images/6_c_mask_dilated.jpg")
 args = parser.parse_args()
 
 
 style_img = Image.open(args.style)
 input_img = Image.open(args.input)
-mask_img = Image.open(args.mask)
-l_mask_image = Image.open(args.loose_mask)
+mask_img = Image.open(args.mask)#.convert('RGB')
+l_mask_image = Image.open(args.loose_mask)#.convert('RGB')
 
 # Define vgg model
 class VGG(nn.Module):
@@ -288,8 +288,8 @@ opt_img = input_norm.clone().cuda()
 opt_img_v = Variable(opt_img[None], requires_grad=True)
 print(opt_img_v.shape)
 
-max_iter = 150
-show_iter = 50
+max_iter = 700
+show_iter = 100
 optimizer = optim.LBFGS([opt_img_v], lr=1)
 
 
@@ -361,5 +361,105 @@ out_img = out_img * (np.array(mask_img)/255) + (np.array(style_img)/255) * (1 - 
 ax.imshow(out_img)
 ax.axis('off')
 plt.show()
+fig.savefig('out.png', bbox_inches='tight', pad_inches=0)
 
 print("Stage 1 is completed...!")
+
+np.save('Results/numpy/6_stage1.npy', out_img)      #Just for the shake of saving
+
+## Phase 2 - Algorithms 3 and 4(Main)
+
+# Load stage1 result numpy file
+stage1_img = np.load('Results/numpy/5_stage1.npy')
+stage1_norm = prep(stage1_img)
+
+stage1_ftr = vgg(Variable(stage1_norm.unsqueeze(0)).type(torch.FloatTensor).cuda(),
+                out_keys=style_layers)
+
+# Another convertng model for mask images
+class Convert(nn.Module):
+    def __init__(self):
+        super(Convert, self).__init__()
+        self.pool = nn.AvgPool2d(3, 1, 1)
+
+    def forward(self, x):
+        out = []
+
+        m = self.pool(Variable(torch.from_numpy(
+            x[None][None]).type(torch.DoubleTensor)))
+        t1 = m.data.squeeze().numpy()
+
+        out.append(t1)
+
+
+        m = self.pool(Variable(torch.from_numpy(
+            t1[None][None]).type(torch.DoubleTensor)))
+        m = m.data.squeeze().numpy()
+
+        h, w = m.shape
+        m = cv2.resize(m, (w // 2, h // 2))
+
+        m = self.pool(Variable(torch.from_numpy(
+            m[None][None]).type(torch.DoubleTensor)))
+        t2 = m.data.squeeze().numpy()
+
+        out.append(t2)
+
+
+
+        m = self.pool(Variable(torch.from_numpy(
+            t2[None][None]).type(torch.DoubleTensor)))
+        m = m.data.squeeze().numpy()
+
+        h, w = m.shape
+        m = cv2.resize(m, (w // 2, h // 2))
+
+        m = self.pool(Variable(torch.from_numpy(
+            m[None][None]).type(torch.DoubleTensor)))
+        t3 = m.data.squeeze().numpy()
+
+        out.append(t3)
+
+        m = self.pool(Variable(torch.from_numpy(
+            t3[None][None]).type(torch.DoubleTensor)))
+        m = self.pool(m)
+        m = m.data.squeeze().numpy()
+
+        h, w = m.shape
+        m = cv2.resize(m, (w // 2, h // 2))
+
+        m = self.pool(Variable(torch.from_numpy(
+            m[None][None]).type(torch.DoubleTensor)))
+        t4 = m.data.squeeze().numpy()
+
+        out.append(t4)
+
+        return out
+
+
+cot = Convert()
+
+
+temp = np.array(l_mask_image)[:,:,0]
+mask_ftrs = cot(temp)
+
+def match_ftrs():
+    res = []
+    l_inp = Variable(patches(
+        stage1_ftr[3].cpu().data.numpy()[0])).cuda()
+    s_inp = Variable(patches(
+        style_ftr[3].cpu().data.numpy()[0])).cuda()
+    scals = torch.mm(l_inp, s_inp.t())
+    norms_in = torch.sqrt((l_inp ** 2).sum(1))
+    norms_st = torch.sqrt((s_inp ** 2).sum(1))
+    l_inp.cpu()
+    del l_inp
+    s_inp.cpu()
+    del s_inp
+    cosine_sim = scals / (1e-15 + norms_in.unsqueeze(1)
+                          * norms_st.unsqueeze(0))
+    _, idx_max = cosine_sim.max(1)
+    res.append(idx_max.cpu().data.numpy())
+    return res
+
+stage_style_map_ftrs = match_ftrs()
